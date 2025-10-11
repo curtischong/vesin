@@ -14,7 +14,7 @@ static void check_neighbors(
     const double (*points)[3],
     size_t n_points,
     const double box[3][3],
-    bool periodic,
+    std::array<bool, 3> periodic,
     double cutoff,
     bool full_list,
     std::vector<std::array<size_t, 2>> expected_pairs,
@@ -36,7 +36,7 @@ static void check_neighbors(
         points,
         n_points,
         box,
-        periodic,
+        periodic.data(),
         {VesinDeviceKind::VesinCPU, 0},
         options,
         &neighbors,
@@ -121,7 +121,7 @@ TEST_CASE("Non-periodic") {
         points,
         /*n_points=*/5,
         box,
-        /*periodic=*/false,
+        /*periodic=*/std::array<bool, 3>{false, false, false},
         /*cutoff=*/3.42,
         /*full_list=*/false,
         expected_pairs,
@@ -167,7 +167,7 @@ TEST_CASE("FCC unit cell") {
         points,
         /*n_points=*/1,
         box,
-        /*periodic=*/true,
+        /*periodic=*/std::array<bool, 3>{true, true, true},
         /*cutoff=*/3.0,
         /*full_list=*/false,
         expected_pairs,
@@ -207,13 +207,51 @@ TEST_CASE("Large box, small cutoff") {
         points,
         /*n_points=*/6,
         box,
-        /*periodic=*/true,
+        /*periodic=*/std::array<bool, 3>{true, true, true},
         /*cutoff=*/2.1,
         /*full_list=*/false,
         expected_pairs,
         expected_shifts,
         expected_distances,
         {}
+    );
+}
+
+TEST_CASE("Mixed periodic boundaries") {
+    double points[][3] = {
+        {0.1, 0.0, 0.0},
+        {0.9, 0.0, 0.0},
+        {0.1, 0.6, 0.0},
+    };
+
+    double box[3][3] = {
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0},
+    };
+
+    auto expected_pairs = std::vector<std::array<size_t, 2>>{
+        {0, 1},
+    };
+    auto expected_shifts = std::vector<std::array<int32_t, 3>>{
+        {-1, 0, 0},
+    };
+    auto expected_distances = std::vector<double>{0.2};
+    auto expected_vectors = std::vector<std::array<double, 3>>{
+        {-0.2, 0.0, 0.0},
+    };
+
+    check_neighbors(
+        points,
+        /*n_points=*/3,
+        box,
+        /*periodic=*/std::array<bool, 3>{true, false, false},
+        /*cutoff=*/0.3,
+        /*full_list=*/false,
+        expected_pairs,
+        expected_shifts,
+        expected_distances,
+        expected_vectors
     );
 }
 

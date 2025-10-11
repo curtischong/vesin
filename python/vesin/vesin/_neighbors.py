@@ -1,11 +1,44 @@
 import ctypes
 from ctypes import ARRAY, POINTER
-from typing import List
+from typing import List, Sequence, Union
 
 import numpy as np
 import numpy.typing as npt
 
-from ._c_api import VesinCPU, VesinDevice, VesinNeighborList, VesinOptions
+from ._c_api import BoolVector3, VesinCPU, VesinDevice, VesinNeighborList, VesinOptions
+
+
+def _normalize_periodic_mask(periodic: object) -> BoolVector3:
+    """Normalize user input describing periodic boundary conditions."""
+    if isinstance(periodic, bool):
+        values = [periodic, periodic, periodic]
+    else:
+        cls = periodic.__class__
+        if cls.__module__.startswith("torch") and cls.__name__ == "Tensor":
+            try:
+                import torch  # type: ignore
+            except ImportError as exc:  # pragma: no cover - torch optional dependency
+                raise TypeError("`periodic` is a torch.Tensor but torch is not available") from exc
+
+            tensor = periodic.detach().to(device="cpu")  # type: ignore[attr-defined]
+            if tensor.numel() not in (1, 3):
+                raise ValueError("`periodic` tensor must contain exactly 1 or 3 elements")
+            tensor = tensor.to(dtype=torch.bool)
+            values = tensor.reshape(-1).tolist()
+        else:
+            arr = np.asarray(periodic, dtype=np.bool_)
+            if arr.ndim == 0:
+                values = [bool(arr.item())]
+            else:
+                values = arr.reshape(-1).tolist()
+
+    values = [bool(v) for v in values]
+    if len(values) == 1:
+        values = values * 3
+    elif len(values) != 3:
+        raise ValueError("`periodic` must be a bool or an iterable with three elements")
+
+    return BoolVector3(*values)
 from ._c_lib import _get_library
 
 
@@ -37,7 +70,7 @@ class NeighborList:
         self,
         points: "npt.ArrayLike",
         box: "npt.ArrayLike",
-        periodic: bool,
+        periodic: "Union[bool, Sequence[bool], npt.ArrayLike]",
         quantities: str = "ij",
         copy=True,
     ) -> List[np.ndarray]:
@@ -83,6 +116,8 @@ class NeighborList:
         if len(points.shape) != 2 or points.shape[1] != 3:
             raise ValueError("`points` must be a nx3 array")
 
+        periodic_mask = _normalize_periodic_mask(periodic)
+
         options = VesinOptions()
         options.cutoff = self.cutoff
         options.full = self.full_list
@@ -96,7 +131,7 @@ class NeighborList:
             points.ctypes.data_as(POINTER(ARRAY(ctypes.c_double, 3))),
             points.shape[0],
             box,
-            periodic,
+            periodic_mask,
             VesinDevice(VesinCPU, 0),
             options,
             self._neighbors,

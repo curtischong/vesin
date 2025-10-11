@@ -28,6 +28,84 @@ static torch::Device vesin_to_torch_device(VesinDevice device) {
     }
 }
 
+static bool ivalue_to_bool(const c10::IValue& value) {
+    if (value.isBool()) {
+        return value.toBool();
+    }
+    if (value.isInt()) {
+        return value.toInt() != 0;
+    }
+    if (value.isDouble()) {
+        return value.toDouble() != 0.0;
+    }
+    if (value.isTensor()) {
+        auto tensor = value.toTensor().detach().to(torch::kBool).cpu();
+        TORCH_CHECK(tensor.numel() == 1, "periodic tensor elements must contain exactly 1 value");
+        return tensor.item<bool>();
+    }
+
+    TORCH_CHECK(false, "unsupported periodic element type");
+    return false;
+}
+
+static std::array<bool, 3> normalize_periodic(const c10::IValue& periodic) {
+    std::array<bool, 3> mask{};
+
+    if (periodic.isBool()) {
+        mask.fill(periodic.toBool());
+        return mask;
+    }
+    if (periodic.isInt()) {
+        mask.fill(periodic.toInt() != 0);
+        return mask;
+    }
+    if (periodic.isDouble()) {
+        mask.fill(periodic.toDouble() != 0.0);
+        return mask;
+    }
+    if (periodic.isTensor()) {
+        auto tensor = periodic.toTensor().detach().to(torch::kBool).cpu();
+        auto numel = tensor.numel();
+        TORCH_CHECK(numel == 1 || numel == 3, "`periodic` tensor must contain 1 or 3 elements");
+        auto flat = tensor.reshape({numel});
+        if (numel == 1) {
+            mask.fill(flat.item<bool>());
+        } else {
+            for (int64_t i = 0; i < 3; i++) {
+                mask[static_cast<size_t>(i)] = flat[i].item<bool>();
+            }
+        }
+        return mask;
+    }
+    if (periodic.isList()) {
+        auto list = periodic.toList();
+        TORCH_CHECK(list.size() == 1 || list.size() == 3, "`periodic` list must contain 1 or 3 elements");
+        if (list.size() == 1) {
+            mask.fill(ivalue_to_bool(list.get(0)));
+        } else {
+            for (int64_t i = 0; i < 3; i++) {
+                mask[static_cast<size_t>(i)] = ivalue_to_bool(list.get(i));
+            }
+        }
+        return mask;
+    }
+    if (periodic.isTuple()) {
+        auto elements = periodic.toTuple()->elements();
+        TORCH_CHECK(elements.size() == 1 || elements.size() == 3, "`periodic` tuple must contain 1 or 3 elements");
+        if (elements.size() == 1) {
+            mask.fill(ivalue_to_bool(elements[0]));
+        } else {
+            for (size_t i = 0; i < 3; i++) {
+                mask[i] = ivalue_to_bool(elements[i]);
+            }
+        }
+        return mask;
+    }
+
+    TORCH_CHECK(false, "unsupported type for `periodic` argument");
+    return mask;
+}
+
 /// Custom autograd function that only registers a custom backward corresponding
 /// to the neighbors list calculation
 class AutogradNeighbors: public torch::autograd::Function<AutogradNeighbors> {
@@ -36,7 +114,7 @@ public:
         torch::autograd::AutogradContext* ctx,
         torch::Tensor points,
         torch::Tensor box,
-        bool periodic,
+        std::array<bool, 3> periodic,
         torch::Tensor pairs,
         torch::optional<torch::Tensor> shifts,
         torch::optional<torch::Tensor> distances,
@@ -65,7 +143,7 @@ NeighborListHolder::~NeighborListHolder() {
 std::vector<torch::Tensor> NeighborListHolder::compute(
     torch::Tensor points,
     torch::Tensor box,
-    bool periodic,
+    std::array<bool, 3> periodic,
     std::string quantities,
     bool copy
 ) {
@@ -105,7 +183,8 @@ std::vector<torch::Tensor> NeighborListHolder::compute(
         C10_THROW_ERROR(ValueError, oss.str());
     }
 
-    if (!periodic) {
+    auto any_periodic = periodic[0] || periodic[1] || periodic[2];
+    if (!any_periodic) {
         box = torch::zeros({3, 3}, points.options());
     }
 
@@ -150,7 +229,7 @@ std::vector<torch::Tensor> NeighborListHolder::compute(
 
     const char* error_message = nullptr;
     auto status = vesin_neighbors(
-        reinterpret_cast<const double (*)[3]>(points.data_ptr<double>()), n_points, reinterpret_cast<const double (*)[3]>(box.data_ptr<double>()), periodic, vesin_device, options, data_, &error_message
+        reinterpret_cast<const double (*)[3]>(points.data_ptr<double>()), n_points, reinterpret_cast<const double (*)[3]>(box.data_ptr<double>()), periodic.data(), vesin_device, options, data_, &error_message
     );
 
     if (status != EXIT_SUCCESS) {
@@ -272,7 +351,18 @@ TORCH_LIBRARY(vesin, m) {
             torch::init<double, bool, bool>(), DOCSTRING,
             {torch::arg("cutoff"), torch::arg("full_list"), torch::arg("sorted") = false}
         )
-        .def("compute", &NeighborListHolder::compute, DOCSTRING,
+        .def(
+            "compute",
+            [](NeighborListHolder& self,
+               torch::Tensor points,
+               torch::Tensor box,
+               const c10::IValue& periodic,
+               std::string quantities,
+               bool copy) {
+                auto mask = normalize_periodic(periodic);
+                return self.compute(points, box, mask, quantities, copy);
+            },
+            DOCSTRING,
             {torch::arg("points"), torch::arg("box"), torch::arg("periodic"), torch::arg("quantities"), torch::arg("copy") = true}
         )
         ;
@@ -287,7 +377,7 @@ std::vector<torch::Tensor> AutogradNeighbors::forward(
     torch::autograd::AutogradContext* ctx,
     torch::Tensor points,
     torch::Tensor box,
-    bool periodic,
+    std::array<bool, 3> periodic,
     torch::Tensor pairs,
     torch::optional<torch::Tensor> shifts,
     torch::optional<torch::Tensor> distances,
@@ -300,7 +390,8 @@ std::vector<torch::Tensor> AutogradNeighbors::forward(
     ctx->save_for_backward(
         {points, box, pairs, shifts_tensor, distances_tensor, vectors_tensor}
     );
-    ctx->saved_data["periodic"] = periodic;
+    auto periodic_tensor = torch::tensor({periodic[0], periodic[1], periodic[2]}, torch::dtype(torch::kBool));
+    ctx->saved_data["periodic"] = periodic_tensor;
 
     auto return_distances = distances.has_value();
     auto return_vectors = vectors.has_value();
@@ -326,7 +417,13 @@ std::vector<torch::Tensor> AutogradNeighbors::backward(
     auto saved_variables = ctx->get_saved_variables();
     auto points = saved_variables[0];
     auto box = saved_variables[1];
-    auto periodic = ctx->saved_data["periodic"].toBool();
+    auto periodic_tensor = ctx->saved_data["periodic"].toTensor();
+    auto periodic_mask = std::array<bool, 3>{
+        periodic_tensor[0].item<bool>(),
+        periodic_tensor[1].item<bool>(),
+        periodic_tensor[2].item<bool>()
+    };
+    auto any_periodic = periodic_mask[0] || periodic_mask[1] || periodic_mask[2];
 
     auto pairs = saved_variables[2];
     auto shifts = saved_variables[3];
@@ -381,7 +478,7 @@ std::vector<torch::Tensor> AutogradNeighbors::backward(
     }
 
     auto box_grad = torch::Tensor();
-    if (periodic && box.requires_grad()) {
+    if (any_periodic && box.requires_grad()) {
         auto cell_shifts = shifts.to(box.scalar_type());
         box_grad = cell_shifts.t().matmul(vectors_grad);
     }

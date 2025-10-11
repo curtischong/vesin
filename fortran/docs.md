@@ -37,7 +37,7 @@ program main
     neighbor_list = NeighborList(cutoff=4.2, full=.true., sorted=.true.)
 
     ! run the calculation
-    call neighbor_list%compute(positions, box, periodic=.true., status=ierr)
+    call neighbor_list%compute(positions, box, periodic=[.true., .true., .true.], status=ierr)
     if (ierr /= 0) then
         write(*, *) neighbor_list%errmsg
         stop

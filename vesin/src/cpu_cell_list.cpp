@@ -177,7 +177,7 @@ CellList::CellList(BoundingBox box, double cutoff):
 
         // don't look for neighboring cells if we have only one cell and no
         // periodic boundary condition
-        if (n_cells[spatial] == 1 && !box.periodic()) {
+        if (n_cells[spatial] == 1 && !box.periodic(spatial)) {
             n_search_[spatial] = 0;
         }
     }
@@ -195,21 +195,21 @@ void CellList::add_point(size_t index, Vector position) {
         static_cast<int32_t>(std::floor(fractional[2] * static_cast<double>(cells_shape_[2]))),
     };
 
-    // deal with pbc by wrapping the atom inside if it was outside of the
-    // cell
-    CellShift shift;
-    // auto (shift, cell_index) =
-    if (box_.periodic()) {
-        auto result = divmod(cell_index, cells_shape_);
-        shift = CellShift{std::get<0>(result)};
-        cell_index = std::get<1>(result);
-    } else {
-        shift = CellShift({0, 0, 0});
-        cell_index = std::array<int32_t, 3>{
-            std::clamp(cell_index[0], 0, static_cast<int32_t>(cells_shape_[0] - 1)),
-            std::clamp(cell_index[1], 0, static_cast<int32_t>(cells_shape_[1] - 1)),
-            std::clamp(cell_index[2], 0, static_cast<int32_t>(cells_shape_[2] - 1)),
-        };
+    // deal with pbc by wrapping the atom inside if it was outside of the cell
+    CellShift shift({0, 0, 0});
+    for (size_t axis = 0; axis < 3; axis++) {
+        if (box_.periodic(axis)) {
+            auto [quotient, remainder] = divmod(cell_index[axis], cells_shape_[axis]);
+            shift[axis] = quotient;
+            cell_index[axis] = remainder;
+        } else {
+            shift[axis] = 0;
+            cell_index[axis] = std::clamp(
+                cell_index[axis],
+                0,
+                static_cast<int32_t>(cells_shape_[axis] - 1)
+            );
+        }
     }
 
     this->get_cell(cell_index).emplace_back(Point{index, shift});
@@ -234,16 +234,42 @@ void CellList::foreach_pair(Function callback) {
 
             // shift vector from one cell to the other and index of
             // the neighboring cell
-            auto [cell_shift, neighbor_cell_i] = divmod(cell_i, cells_shape_);
+            auto neighbor_cell_i = cell_i;
+            auto cell_shift = CellShift({0, 0, 0});
+            bool skip_cell = false;
+            for (size_t axis = 0; axis < 3; axis++) {
+                if (box_.periodic(axis)) {
+                    auto [quotient, remainder] = divmod(neighbor_cell_i[axis], cells_shape_[axis]);
+                    cell_shift[axis] = quotient;
+                    neighbor_cell_i[axis] = remainder;
+                } else {
+                    if (neighbor_cell_i[axis] < 0 || neighbor_cell_i[axis] >= static_cast<int32_t>(cells_shape_[axis])) {
+                        skip_cell = true;
+                        break;
+                    }
+                }
+            }
+
+            if (skip_cell) {
+                continue;
+            }
 
             for (const auto& atom_i: current_cell) {
                 for (const auto& atom_j: this->get_cell(neighbor_cell_i)) {
                     auto shift = CellShift{cell_shift} + atom_i.shift - atom_j.shift;
                     auto shift_is_zero = shift[0] == 0 && shift[1] == 0 && shift[2] == 0;
 
-                    if (!box_.periodic() && !shift_is_zero) {
-                        // do not create pairs crossing the periodic
-                        // boundaries in a non-periodic box
+                    bool crosses_non_periodic = false;
+                    for (size_t axis = 0; axis < 3; axis++) {
+                        if (!box_.periodic(axis) && shift[axis] != 0) {
+                            crosses_non_periodic = true;
+                            break;
+                        }
+                    }
+
+                    if (crosses_non_periodic) {
+                        // do not create pairs crossing the boundaries of a
+                        // non-periodic axis
                         continue;
                     }
 

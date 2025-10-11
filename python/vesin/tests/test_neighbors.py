@@ -127,3 +127,59 @@ def test_errors():
     with pytest.raises(RuntimeError, match=message):
         nl = vesin.NeighborList(cutoff=float("nan"), full_list=True)
         nl.compute(points, box, periodic=True, quantities="ij")
+
+
+def _mixed_periodic_result(periodic):
+    points = np.array(
+        [
+            [0.1, 0.0, 0.0],
+            [0.9, 0.0, 0.0],
+            [0.1, 0.6, 0.0],
+        ],
+        dtype=float,
+    )
+    box = np.eye(3, dtype=float)
+    calculator = vesin.NeighborList(cutoff=0.3, full_list=False, sorted=True)
+    return calculator.compute(points, box, periodic=periodic, quantities="ijSdD")
+
+
+@pytest.mark.parametrize(
+    "periodic",
+    ([True, False, False], np.array([True, False, False], dtype=bool), np.array([True], dtype=bool)),
+)
+def test_mixed_periodic_iterables(periodic):
+    i, j, shifts, distances, vectors = _mixed_periodic_result(periodic)
+
+    assert np.all(i == np.array([0]))
+    assert np.all(j == np.array([1]))
+    np.testing.assert_array_equal(shifts, np.array([[-1, 0, 0]], dtype=np.int32))
+    np.testing.assert_allclose(distances, np.array([0.2]))
+    np.testing.assert_allclose(vectors, np.array([[-0.2, 0.0, 0.0]]))
+
+
+def test_mixed_periodic_tensor():
+    torch = pytest.importorskip("torch")
+
+    periodic = torch.tensor([True, False, False], dtype=torch.bool, device="cpu")
+    i, j, shifts, distances, vectors = _mixed_periodic_result(periodic)
+
+    assert np.all(i == np.array([0]))
+    assert np.all(j == np.array([1]))
+    np.testing.assert_array_equal(shifts, np.array([[-1, 0, 0]], dtype=np.int32))
+    np.testing.assert_allclose(distances, np.array([0.2]))
+    np.testing.assert_allclose(vectors, np.array([[-0.2, 0.0, 0.0]]))
+
+
+def test_non_periodic_axis_rejected():
+    points = np.array(
+        [
+            [0.1, 0.0, 0.0],
+            [0.9, 0.0, 0.0],
+        ],
+        dtype=float,
+    )
+    box = np.eye(3, dtype=float)
+    calculator = vesin.NeighborList(cutoff=0.3, full_list=False, sorted=True)
+
+    i, *_ = calculator.compute(points, box, periodic=[False, False, False], quantities="i")
+    assert len(i) == 0

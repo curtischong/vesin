@@ -3,7 +3,9 @@
 #include "vesin_cuda.hpp"
 
 #include <cassert>
+#include <cmath>
 #include <cstdio>
+#include <limits>
 #include <stdexcept>
 
 #include <cuda_runtime.h>
@@ -59,24 +61,35 @@ __device__ void apply_periodic_boundary(
     double3& vector,
     int3& shift,
     const double* cell,
-    const double* inv_cell
+    const double* inv_cell,
+    int3 periodic_mask
 ) {
     double3 fractional;
     fractional.x = vector.x * inv_cell[0] + vector.y * inv_cell[1] + vector.z * inv_cell[2];
     fractional.y = vector.x * inv_cell[3] + vector.y * inv_cell[4] + vector.z * inv_cell[5];
     fractional.z = vector.x * inv_cell[6] + vector.y * inv_cell[7] + vector.z * inv_cell[8];
 
-    int32_t sx = static_cast<int32_t>(round(fractional.x));
-    int32_t sy = static_cast<int32_t>(round(fractional.y));
-    int32_t sz = static_cast<int32_t>(round(fractional.z));
+    bool periodic_x = periodic_mask.x != 0;
+    bool periodic_y = periodic_mask.y != 0;
+    bool periodic_z = periodic_mask.z != 0;
+
+    int32_t sx = periodic_x ? static_cast<int32_t>(round(fractional.x)) : 0;
+    int32_t sy = periodic_y ? static_cast<int32_t>(round(fractional.y)) : 0;
+    int32_t sz = periodic_z ? static_cast<int32_t>(round(fractional.z)) : 0;
 
     shift.x = sx;
     shift.y = sy;
     shift.z = sz;
 
-    fractional.x -= sx;
-    fractional.y -= sy;
-    fractional.z -= sz;
+    if (periodic_x) {
+        fractional.x -= sx;
+    }
+    if (periodic_y) {
+        fractional.y -= sy;
+    }
+    if (periodic_z) {
+        fractional.z -= sz;
+    }
 
     double3 wrapped;
     wrapped.x = fractional.x * cell[0] + fractional.y * cell[3] + fractional.z * cell[6];
@@ -98,7 +111,8 @@ __global__ void compute_mic_neighbours_full_impl(
     double* vectors,
     bool return_shifts,
     bool return_distances,
-    bool return_vectors
+    bool return_vectors,
+    int3 periodic_mask
 ) {
     __shared__ double scell[9];
     __shared__ double sinv_cell[9];
@@ -135,7 +149,7 @@ __global__ void compute_mic_neighbours_full_impl(
         double3 vector = ri - rj;
         int3 shift = make_int3(0, 0, 0);
         if (cell != nullptr) {
-            apply_periodic_boundary(vector, shift, scell, sinv_cell);
+            apply_periodic_boundary(vector, shift, scell, sinv_cell, periodic_mask);
         }
 
         double distance2 = dot(vector, vector);
@@ -182,7 +196,8 @@ __global__ void compute_mic_neighbours_half_impl(
     double* vectors,
     bool return_shifts,
     bool return_distances,
-    bool return_vectors
+    bool return_vectors,
+    int3 periodic_mask
 ) {
     const size_t index = blockIdx.x * blockDim.x + threadIdx.x;
     const size_t num_all_pairs = n_points * (n_points - 1) / 2;
@@ -223,7 +238,7 @@ __global__ void compute_mic_neighbours_half_impl(
     double3 vector = ri - rj;
     int3 shift = make_int3(0, 0, 0);
     if (cell != nullptr) {
-        apply_periodic_boundary(vector, shift, scell, sinv_cell);
+        apply_periodic_boundary(vector, shift, scell, sinv_cell, periodic_mask);
     }
 
     double distance2 = dot(vector, vector);
@@ -260,7 +275,7 @@ __global__ void compute_mic_neighbours_half_impl(
     }
 }
 
-__global__ void mic_cell_check(const double* cell, const double cutoff, int32_t* status) {
+__global__ void mic_cell_check(const double* cell, const double cutoff, int32_t* status, int3 periodic_mask) {
 
     __shared__ double scell[9];
 
@@ -273,6 +288,15 @@ __global__ void mic_cell_check(const double* cell, const double cutoff, int32_t*
     __syncthreads();
 
     if (threadIdx.x == 0) {
+
+        bool periodic_x = periodic_mask.x != 0;
+        bool periodic_y = periodic_mask.y != 0;
+        bool periodic_z = periodic_mask.z != 0;
+
+        if (!periodic_x && !periodic_y && !periodic_z) {
+            status[0] = 0;
+            return;
+        }
 
         // Extract lattice vectors
         double ax = scell[0], ay = scell[1], az = scell[2];
@@ -295,10 +319,18 @@ __global__ void mic_cell_check(const double* cell, const double cutoff, int32_t*
                              (fabs(ac_dot) < tol * a_norm * c_norm) &&
                              (fabs(bc_dot) < tol * b_norm * c_norm);
 
-        double min_dim;
+        double min_dim = std::numeric_limits<double>::infinity();
 
         if (is_orthogonal) {
-            min_dim = fminf(a_norm, fminf(b_norm, c_norm));
+            if (periodic_x) {
+                min_dim = fmin(min_dim, a_norm);
+            }
+            if (periodic_y) {
+                min_dim = fmin(min_dim, b_norm);
+            }
+            if (periodic_z) {
+                min_dim = fmin(min_dim, c_norm);
+            }
         } else {
             // General case
             double bc_x = by * cz - bz * cy;
@@ -321,7 +353,20 @@ __global__ void mic_cell_check(const double* cell, const double cutoff, int32_t*
             double d_b = V / ac_norm;
             double d_c = V / ab_norm;
 
-            min_dim = fminf(d_a, fminf(d_b, d_c));
+            if (periodic_x) {
+                min_dim = fmin(min_dim, d_a);
+            }
+            if (periodic_y) {
+                min_dim = fmin(min_dim, d_b);
+            }
+            if (periodic_z) {
+                min_dim = fmin(min_dim, d_c);
+            }
+        }
+
+        if (!std::isfinite(min_dim) || min_dim == std::numeric_limits<double>::infinity()) {
+            status[0] = 0;
+            return;
         }
 
         if (cutoff * 2.0 > min_dim) {
@@ -338,12 +383,22 @@ void vesin::cuda::compute_mic_neighbourlist(
     const double cell[3][3],
     int32_t* d_cell_check,
     VesinOptions options,
+    const std::array<bool, 3>& periodic,
     VesinNeighborList& neighbors
 ) {
     auto extras = vesin::cuda::get_cuda_extras(&neighbors);
 
     const double* d_positions = reinterpret_cast<const double*>(points);
     const double* d_cell = reinterpret_cast<const double*>(cell);
+    int3 periodic_mask = make_int3(
+        periodic[0] ? 1 : 0,
+        periodic[1] ? 1 : 0,
+        periodic[2] ? 1 : 0
+    );
+    bool any_periodic = periodic_mask.x || periodic_mask.y || periodic_mask.z;
+    if (!any_periodic) {
+        d_cell = nullptr;
+    }
 
     size_t* d_pair_indices = reinterpret_cast<size_t*>(neighbors.pairs);
     int32_t* d_shifts = reinterpret_cast<int32_t*>(neighbors.shifts);
@@ -353,16 +408,18 @@ void vesin::cuda::compute_mic_neighbourlist(
 
     dim3 blockDim(WARP_SIZE * NWARPS);
 
-    mic_cell_check<<<1, 32>>>(d_cell, options.cutoff, d_cell_check);
-    int32_t h_cell_check = 0;
-    cudaMemcpy(&h_cell_check, d_cell_check, sizeof(int32_t), cudaMemcpyDeviceToHost);
+    if (any_periodic) {
+        mic_cell_check<<<1, 32>>>(d_cell, options.cutoff, d_cell_check, periodic_mask);
+        int32_t h_cell_check = 0;
+        cudaMemcpy(&h_cell_check, d_cell_check, sizeof(int32_t), cudaMemcpyDeviceToHost);
 
-    if (h_cell_check != 0) {
-        throw std::runtime_error(
-            "Cutoff it too large for the current box, the CUDA implementation "
-            "of vesin uses minimum image convention (MIC). Each box dimension "
-            "must be at least twice the cutoff."
-        );
+        if (h_cell_check != 0) {
+            throw std::runtime_error(
+                "Cutoff it too large for the current box, the CUDA implementation "
+                "of vesin uses minimum image convention (MIC). Each periodic box dimension "
+                "must be at least twice the cutoff."
+            );
+        }
     }
 
     if (options.full) {
@@ -380,7 +437,8 @@ void vesin::cuda::compute_mic_neighbourlist(
             d_vectors,
             options.return_shifts,
             options.return_distances,
-            options.return_vectors
+            options.return_vectors,
+            periodic_mask
         );
 
     } else {
@@ -403,7 +461,8 @@ void vesin::cuda::compute_mic_neighbourlist(
             d_vectors,
             options.return_shifts,
             options.return_distances,
-            options.return_vectors
+            options.return_vectors,
+            periodic_mask
         );
     }
 
