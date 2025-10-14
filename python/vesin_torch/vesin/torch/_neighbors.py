@@ -39,7 +39,7 @@ class NeighborList:
         self,
         points: torch.Tensor,
         box: torch.Tensor,
-        periodic: torch.Tensor,
+        periodic: Union[bool, List[bool], torch.Tensor],
         quantities: str,
         copy: bool = True,
     ) -> List[torch.Tensor]:
@@ -71,7 +71,7 @@ class NeighborList:
         return self._c.compute(
             points=points,
             box=box,
-            periodic=_normalize_periodic_mask(periodic),
+            periodic=_normalize_periodic_mask(periodic).to(points.device),
             quantities=quantities,
             copy=copy,
         )
