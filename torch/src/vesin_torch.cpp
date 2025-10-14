@@ -165,9 +165,16 @@ std::vector<torch::Tensor> NeighborListHolder::compute(
         periodic = periodic.contiguous();
     }
 
+    // `vesin_neighbors` expects `periodic` to be on CPU, so we might need to
+    // copy it
+    auto periodic_on_cpu = periodic;
+    if (periodic.is_cuda()) {
+        periodic_on_cpu = periodic.to(torch::kCPU);
+    }
+
     const char* error_message = nullptr;
     auto status = vesin_neighbors(
-        reinterpret_cast<const double (*)[3]>(points.data_ptr<double>()), n_points, reinterpret_cast<const double (*)[3]>(box.data_ptr<double>()), periodic.data_ptr<bool>(), vesin_device, options, data_, &error_message
+        reinterpret_cast<const double (*)[3]>(points.data_ptr<double>()), n_points, reinterpret_cast<const double (*)[3]>(box.data_ptr<double>()), periodic_on_cpu.data_ptr<bool>(), vesin_device, options, data_, &error_message
     );
 
     if (status != EXIT_SUCCESS) {
