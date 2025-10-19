@@ -7,10 +7,10 @@ namespace vesin {
 
 class BoundingBox {
 public:
-    BoundingBox(Matrix matrix, bool periodic):
+    BoundingBox(Matrix matrix, std::array<bool, 3> periodic):
         matrix_(matrix),
         periodic_(periodic) {
-        if (periodic) {
+        if (periodic[0] || periodic[1] || periodic[2]) {
             auto det = matrix_.determinant();
             if (std::abs(det) < 1e-30) {
                 throw std::runtime_error("the box matrix is not invertible");
@@ -33,8 +33,12 @@ public:
         return this->matrix_;
     }
 
-    bool periodic() const {
+    std::array<bool, 3> periodic() const {
         return this->periodic_;
+    }
+
+    bool periodic(size_t axis) const {
+        return periodic_[axis];
     }
 
     /// Convert a vector from cartesian coordinates to fractional coordinates
@@ -68,7 +72,7 @@ public:
 private:
     Matrix matrix_;
     Matrix inverse_;
-    bool periodic_;
+    std::array<bool, 3> periodic_;
 };
 
 /// A cell shift represents the displacement along cell axis between the actual
