@@ -230,21 +230,18 @@ void CellList::foreach_pair(Function callback) {
 
             // shift vector from one cell to the other and index of
             // the neighboring cell
-            auto [cell_shift, neighbor_cell_i] = divmod(cell_i, cells_shape_);
+            auto neighbor_cell_i = cell_i;
+            CellShift cell_shift({0, 0, 0});
+
+            bool is_neighboring_cell_outside_bounds = calc_neighbor_cell_shifts_and_check_outside_bounds(neighbor_cell_i, cell_shift);
+            if (is_neighboring_cell_outside_bounds) {
+                continue;
+            }
 
             for (const auto& atom_i: current_cell) {
                 for (const auto& atom_j: this->get_cell(neighbor_cell_i)) {
                     auto shift = CellShift{cell_shift} + atom_i.shift - atom_j.shift;
                     auto shift_is_zero = shift[0] == 0 && shift[1] == 0 && shift[2] == 0;
-
-                    if ((shift[0] != 0 && !box_.periodic(0)) ||
-                        (shift[1] != 0 && !box_.periodic(1)) ||
-                        (shift[2] != 0 && !box_.periodic(2)))
-                    {
-                        // do not create pairs crossing the periodic
-                        // boundaries in a non-periodic box
-                        continue;
-                    }
 
                     if (atom_i.index == atom_j.index && shift_is_zero) {
                         // only create pairs with the same atom twice if the
@@ -257,6 +254,24 @@ void CellList::foreach_pair(Function callback) {
             } // loop over atoms in current neighbor cells
         }}}
     }}} // loop over neighboring cells
+}
+
+bool CellList::calc_neighbor_cell_shifts_and_check_outside_bounds(std::array<int32_t, 3>& neighbor_cell_i, CellShift& cell_shift) const {
+    for (size_t axis = 0; axis < 3; axis++) {
+        if (box_.periodic(axis)) {
+            // since we have periodic boundary conditions for this axis, there will always be a neighboring cell
+            // we use divmod to find the shift and the neighboring cell index
+            auto [quotient, remainder] = divmod(neighbor_cell_i[axis], cells_shape_[axis]);
+            cell_shift[axis] = quotient;
+            neighbor_cell_i[axis] = remainder;
+        } else {
+            // if periodicity is disabled for this axis, we skip this cell if it is outside the simulation bounds
+            if (neighbor_cell_i[axis] < 0 || neighbor_cell_i[axis] >= static_cast<int32_t>(cells_shape_[axis])) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 CellList::Cell& CellList::get_cell(std::array<int32_t, 3> index) {
