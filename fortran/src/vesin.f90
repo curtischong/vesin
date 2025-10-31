@@ -149,15 +149,15 @@ contains
         !! this is ignored. This should contain the three vectors of the
         !! bounding box, one vector per column of the matrix.
         real(c_double), intent(in) :: box(3, 3)
-        !> Is the system using periodic boundary conditions?
-        logical, intent(in) :: periodic
+        !> Periodic boundary conditions mask per axis.
+        logical, intent(in) :: periodic(3)
         !> Status code of the operation, this will be 0 if there are no error,
         !! and non-zero otherwise. The full error message will be stored in
         !! `self%errmsg`.
         integer, optional :: status
 
         integer :: points_shape(2)
-        logical(c_bool) :: c_periodic
+        logical(c_bool) :: c_periodic(3)
         type(c_ptr) :: c_errmsg = c_null_ptr
 
         self%errmsg = ""
@@ -227,8 +227,8 @@ contains
         !! this is ignored. This should contain the three vectors of the
         !! bounding box, one vector per column of the matrix.
         real(c_float), intent(in) :: box(3, 3)
-        !> Is the system using periodic boundary conditions?
-        logical, intent(in) :: periodic
+        !> Periodic boundary conditions mask per axis.
+        logical, intent(in) :: periodic(3)
         !> Status code of the operation, this will be 0 if there are no error,
         !! and non-zero otherwise. The full error message will be stored in
         !! `self%errmsg`.

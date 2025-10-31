@@ -1,6 +1,8 @@
 #ifndef MIC_NEIGHBOURLIST_CUH
 #define MIC_NEIGHBOURLIST_CUH
 
+#include <array>
+
 #include "vesin.h"
 
 namespace vesin {
@@ -22,12 +24,14 @@ namespace cuda {
 ///      needed)
 /// @param d_cell_check device-allocated status checking valid cell size with
 ///     respect to cutoff .
+
 void compute_mic_neighbourlist(
     const double (*points)[3],
     size_t n_points,
     const double cell[3][3],
     int* d_cell_check,
     VesinOptions options,
+    const std::array<bool, 3>& periodic,
     VesinNeighborList& neighbors
 );
 

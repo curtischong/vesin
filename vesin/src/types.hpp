@@ -1,16 +1,20 @@
 #ifndef VESIN_TYPES_HPP
 #define VESIN_TYPES_HPP
 
+#include <array>
+
 #include "math.hpp"
 
 namespace vesin {
 
 class BoundingBox {
 public:
-    BoundingBox(Matrix matrix, bool periodic):
+    BoundingBox(Matrix matrix, std::array<bool, 3> periodic):
         matrix_(matrix),
+        inverse_(matrix),
         periodic_(periodic) {
-        if (periodic) {
+        auto any_periodic = periodic_[0] || periodic_[1] || periodic_[2];
+        if (any_periodic) {
             auto det = matrix_.determinant();
             if (std::abs(det) < 1e-30) {
                 throw std::runtime_error("the box matrix is not invertible");
@@ -34,7 +38,11 @@ public:
     }
 
     bool periodic() const {
-        return this->periodic_;
+        return periodic_[0] || periodic_[1] || periodic_[2];
+    }
+
+    bool periodic(size_t axis) const {
+        return periodic_[axis];
     }
 
     /// Convert a vector from cartesian coordinates to fractional coordinates
@@ -68,7 +76,7 @@ public:
 private:
     Matrix matrix_;
     Matrix inverse_;
-    bool periodic_;
+    std::array<bool, 3> periodic_;
 };
 
 /// A cell shift represents the displacement along cell axis between the actual

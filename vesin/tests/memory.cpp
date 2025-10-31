@@ -1,3 +1,4 @@
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 
 #include <vesin.h>
@@ -13,7 +14,7 @@ TEST_CASE("Re-use allocations") {
         {1.5, 0.0, 1.5},
         {1.5, 1.5, 0.0},
     };
-    bool periodic = true;
+    auto periodic = std::array<bool, 3>{true, true, true};
 
     VesinNeighborList neighbors;
 
@@ -23,7 +24,7 @@ TEST_CASE("Re-use allocations") {
             points,
             n_points,
             box,
-            periodic,
+            periodic.data(),
             {VesinDeviceKind::VesinCPU, 0},
             options,
             &neighbors,

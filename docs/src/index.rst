@@ -225,9 +225,12 @@ Usage example
             i, j, S, d = calculator.compute(
                 points=points,
                 box=box,
-                periodic=True,
+                periodic=[True, True, True],
                 quantities="ijSd"
             )
+
+        The ``periodic`` argument accepts either a single boolean or an iterable
+        with three booleans to specify per-axis periodic boundary conditions.
 
         Alternatively, you can use the :py:func:`ase_neighbor_list` function,
         which mimics the API of :py:func:`ase.neighborlist.neighbor_list`:
@@ -267,7 +270,7 @@ Usage example
                     {0.0, 3.2, 0.0},
                     {0.0, 0.0, 3.2},
                 };
-                bool periodic = true;
+                bool periodic[3] = {true, true, true};
 
                 // calculation setup
                 VesinOptions options;
@@ -283,6 +286,7 @@ Usage example
                 memset(&neighbors, 0, sizeof(VesinNeighborList));
 
                 const char* error_message = NULL;
+
                 int status = vesin_neighbors(
                     points, n_points, box, periodic,
                     VesinCPU, options,
